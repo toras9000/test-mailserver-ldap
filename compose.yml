@@ -1,0 +1,137 @@
+name: test-mailserver-ldap
+
+volumes:
+  mailserver-data-mail:
+  mailserver-data-state:
+  mailserver-data-logs:
+  mailserver-data-config:
+  openldap-data:
+
+services:
+  ldap:
+    image: bitnami/openldap:2.6
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - openldap-container
+    ports:
+      - "389:1389"
+    volumes:
+      - type: bind
+        source: ./assets/ldifs
+        target: /ldifs
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: openldap-data
+        target: /bitnami/openldap
+    environment:
+      - TZ=Asia/Tokyo
+      - LDAP_PORT_NUMBER=1389
+      - LDAP_ROOT=dc=myserver,o=home
+      - LDAP_ADMIN_USERNAME=admin
+      - LDAP_ADMIN_PASSWORD=admin-pass
+      - LDAP_CONFIG_ADMIN_ENABLED=yes
+      - LDAP_CONFIG_ADMIN_USERNAME=config-admin
+      - LDAP_CONFIG_ADMIN_PASSWORD=config-admin-pass
+      - LDAP_CUSTOM_LDIF_DIR=/ldifs
+
+  mail:
+    image: mailserver/docker-mailserver:latest
+    restart: unless-stopped
+    stop_grace_period: 1m
+    depends_on:
+      ldap:
+        condition: service_started
+    networks:
+      default:
+        aliases:
+          - mail-container
+    healthcheck:
+      test: "ss --listening --tcp | grep -P 'LISTEN.+:smtp' || exit 1"
+      start_period: 300s
+      start_interval: 3s
+      timeout: 5s
+      interval: 300s
+      retries: 3
+    volumes:
+      - type: volume
+        source: mailserver-data-mail
+        target: /var/mail
+      - type: volume
+        source: mailserver-data-state
+        target: /var/mail-state
+      - type: volume
+        source: mailserver-data-logs
+        target: /var/log/mail
+      - type: volume
+        source: mailserver-data-config
+        target: /tmp/docker-mailserver
+    environment:
+      - TZ=Asia/Tokyo
+      - LOG_LEVEL=debug
+      - OVERRIDE_HOSTNAME=myserver.home
+      - DMS_VMAIL_UID=5000
+      - DMS_VMAIL_GID=5000
+      - ACCOUNT_PROVISIONER=LDAP
+      - PERMIT_DOCKER=
+      - ENABLE_UPDATE_CHECK=0
+      - ENABLE_SRS=0
+      - ENABLE_OPENDKIM=1
+      - ENABLE_OPENDMARC=1
+      - ENABLE_POLICYD_SPF=1
+      - ENABLE_POP3=1
+      - ENABLE_IMAP=1
+      - ENABLE_CLAMAV=0
+      - ENABLE_RSPAMD=0
+      - ENABLE_AMAVIS=0
+      - ENABLE_DNSBL=0
+      - ENABLE_FAIL2BAN=0
+      - SSL_TYPE=
+      - ENABLE_QUOTAS=0
+      - ENABLE_MTA_STS=0
+      - DOVECOT_INET_PROTOCOLS=all
+      - ENABLE_SPAMASSASSIN=0
+      - ENABLE_FETCHMAIL=0
+      - ENABLE_OAUTH2=
+      - LDAP_START_TLS=
+      - LDAP_SERVER_HOST=ldap://openldap-container:1389
+      - LDAP_SEARCH_BASE=ou=persons,ou=accounts,dc=myserver,o=home
+      - LDAP_BIND_DN=uid=configurator,ou=operators,dc=myserver,o=home
+      - LDAP_BIND_PW=configurator-pass
+      - LDAP_QUERY_FILTER_DOMAIN=(&(objectClass=inetOrgPerson)(mail=*@%s)(!(mailEnabled=FALSE)))
+      - LDAP_QUERY_FILTER_USER=(&(objectClass=inetOrgPerson)(uid=%s)(!(mailEnabled=FALSE)))
+      - LDAP_QUERY_FILTER_GROUP=
+      - LDAP_QUERY_FILTER_ALIAS=
+      - DOVECOT_MAILBOX_FORMAT=maildir
+      - DOVECOT_AUTH_BIND=yes
+      - DOVECOT_USER_FILTER=(&(objectClass=inetOrgPerson)(uid=%u))
+      - DOVECOT_PASS_ATTRS=uid=user,userPassword=password
+      - DOVECOT_USER_ATTRS==home=/var/mail/%{ldap:uid},=mail=maildir:~/Maildir,uidNumber=uid,=gid=5000
+      - DOVECOT_TLS=
+      - ENABLE_POSTGREY=0
+      - ENABLE_SASLAUTHD=1
+      - SASLAUTHD_MECHANISMS=ldap
+      - SASLAUTHD_LDAP_FILTER=(&(objectClass=inetOrgPerson)(mail=%U@myserver.home))
+      - SRS_SENDER_CLASSES=envelope_sender
+
+  mail-ui:
+    image: roundcube/roundcubemail:latest
+    restart: unless-stopped
+    depends_on:
+      mail:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - mail-ui-container
+    ports:
+      - "8186:80"
+    environment:
+      - TZ=Asia/Tokyo
+      - ROUNDCUBEMAIL_DEFAULT_HOST=mail-container
+      - ROUNDCUBEMAIL_DEFAULT_PORT=143
+      - ROUNDCUBEMAIL_SMTP_SERVER=mail-container
+      - ROUNDCUBEMAIL_SMTP_PORT=587
